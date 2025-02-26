@@ -1,0 +1,248 @@
+import sqlite3
+import getpass
+import os
+import re
+from datetime import datetime
+from hashlib import sha256
+
+# Database setup
+def setup_database():
+    conn = sqlite3.connect('hospital.db')
+    cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        username TEXT NOT NULL UNIQUE,
+                        password TEXT NOT NULL,
+                        role TEXT NOT NULL
+                    )''')
+    # Drop the existing patients table if it exists to ensure schema is correct
+    cursor.execute('''DROP TABLE IF EXISTS patients''')
+    cursor.execute('''CREATE TABLE patients (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        age INTEGER NOT NULL,
+                        contact TEXT NOT NULL,
+                        reason TEXT NOT NULL,
+                        doctor TEXT NOT NULL,
+                        date TEXT NOT NULL
+                    )''')
+    # Insert the admin credentials if not already present
+    admin_username = "admin"
+    admin_password = hash_password("admin123")
+    cursor.execute("INSERT OR IGNORE INTO users (username, password, role) VALUES (?, ?, ?)",
+                   (admin_username, admin_password, "admin"))
+    conn.commit()
+    conn.close()
+
+# Hash password
+def hash_password(password):
+    return sha256(password.encode()).hexdigest()
+
+# List of doctors with their specializations
+DOCTORS = [
+    {"name": "Dr. John Smith", "specialization": "Cardiology"},
+    {"name": "Dr. Emily Johnson", "specialization": "Pediatrics"},
+    {"name": "Dr. Michael Brown", "specialization": "Orthopedics"},
+    {"name": "Dr. Sarah Davis", "specialization": "Dermatology"},
+    {"name": "Dr. David Wilson", "specialization": "Neurology"}
+]
+
+#input validation patterns
+USERNAME_PATTERN = r'^[a-zA-Z0-9_.-]+$'
+ROLE_PATTERN = r'^(admin|user)$'
+NAME_PATTERN = r'^[a-zA-Z\s]+$'
+AGE_PATTERN = r'^\d+$'
+CONTACT_PATTERN = r'^\+?\d{10,15}$'
+FILENAME_PATTERN = r'^[\w,\s-]+\.[A-Za-z]{3,4}$'
+
+# Register a new user with prepared statements to prevent SQL injection
+def register_user():
+    username = input("Enter username: ")
+
+    password = getpass.getpass("Enter password: ")
+
+    
+    role = input("Enter role (admin/user): ")
+
+    # Input validation
+    if not re.match(USERNAME_PATTERN, username):
+        print("Invalid username. Only alphanumeric characters and _ . - are allowed.")
+        return
+    if not re.match(ROLE_PATTERN, role):
+        print("Invalid role. Please enter 'admin' or 'user'.")
+        return
+
+    hashed_password = hash_password(password)
+
+    conn = sqlite3.connect('hospital.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", (username, hashed_password, role))
+        conn.commit()
+        print("User registered successfully.")
+    except sqlite3.IntegrityError:
+        print("Username already exists. Please choose a different username.")
+    finally:
+        conn.close()
+
+# Authenticate user with hashed password verification and prepared statements to prevent SQL injection
+def authenticate_user():
+    username = input("Enter username: ")
+    password = getpass.getpass("Enter password: ")
+
+    hashed_password = hash_password(password)
+
+    conn = sqlite3.connect('hospital.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE username=? AND password=?", (username, hashed_password))
+    user = cursor.fetchone()
+    conn.close()
+    
+    if user:
+        print(f"Login successful. Welcome, {user[1]}!")
+        return user[3]
+    else:
+        print("Login failed. Invalid credentials.")
+        return None
+
+# Register a new patient with input validation and prepared statements to prevent SQL injection
+def register_patient():
+    name = input("Enter patient's name: ")
+    age = input("Enter patient's age: ")
+    contact = input("Enter patient's contact number: ")
+    reason = input("Enter reason for visit: ")
+
+    # Input validation
+    if not re.match(NAME_PATTERN, name):
+        print("Invalid name. Only alphabetic characters and spaces are allowed.")
+        return
+    if not re.match(AGE_PATTERN, age):
+        print("Invalid age. Please enter a valid number.")
+        return
+    if not re.match(CONTACT_PATTERN, contact):
+        print("Invalid contact number. Please enter a valid phone number.")
+        return
+    if not reason:
+        print("Invalid reason. Please enter a reason for the visit.")
+        return
+
+    display_doctors()
+    try:
+        doctor_choice = int(input("Enter the number of the doctor to assign to the patient: "))
+        if doctor_choice < 1 or doctor_choice > len(DOCTORS):
+            print("Invalid doctor choice.")
+            return
+    except ValueError:
+        print("Invalid input. Please enter a valid number.")
+        return
+
+    doctor = DOCTORS[doctor_choice - 1]["name"]
+    date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    conn = sqlite3.connect('hospital.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO patients (name, age, contact, reason, doctor, date) VALUES (?, ?, ?, ?, ?, ?)",
+                   (name, int(age), contact, reason, doctor, date))
+    conn.commit()
+    conn.close()
+    print("Patient registered successfully.")
+
+# Display list of doctors
+def display_doctors():
+    print("\nList of Doctors:")
+    for i, doctor in enumerate(DOCTORS):
+        print(f"{i + 1}. {doctor['name']} - {doctor['specialization']}")
+
+# Display patient records with prepared statements to prevent SQL injection
+def display_patient_records():
+    doctor = input("Enter doctor's name to view patients: ")
+
+    conn = sqlite3.connect('hospital.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM patients WHERE doctor=?", (doctor,))
+    patients = cursor.fetchall()
+    conn.close()
+    
+    if patients:
+        for patient in patients:
+            print(f"\nPatient Name: {patient[1]}\nAge: {patient[2]}\nContact Number: {patient[3]}\nReason for Visit: {patient[4]}\nAssigned Doctor: {patient[5]}\nRegistration Date: {patient[6]}")
+    else:
+        print("No patients found.")
+
+# Secure file read to prevent Path Traversal
+def read_file():
+    filename = input("Enter the filename to read: ")
+    if not re.match(FILENAME_PATTERN, filename):
+        print("Invalid filename.")
+        return
+    filepath = os.path.join(os.getcwd(), filename)
+    if os.path.exists(filepath):
+        with open(filepath, "r") as file:
+            print(file.read())
+    else:
+        print("File not found.")
+
+# Secure file write to prevent Path Traversal
+def write_file():
+    filename = input("Enter the filename to write: ")
+    if not re.match(FILENAME_PATTERN, filename):
+        print("Invalid filename.")
+        return
+    content = input("Enter the content to write: ")
+    filepath = os.path.join(os.getcwd(), filename)
+    with open(filepath, "w") as file:
+        file.write(content)
+    print("Content written successfully.")
+
+# Main function to run the system
+def main():
+    setup_database()
+    print("Welcome to the Hospital Registration System")
+    while True:
+        print("\n1. Login\n2. Exit")
+        choice = input("Enter your choice: ")
+
+        if choice == '1':
+            role = authenticate_user()
+            if role == "admin":
+                print("Admin login successful.")
+                while True:
+                    print("\n1. Register User\n2. Register Patient\n3. View Patient Records\n4. Read File\n5. Write File\n6. Logout")
+                    sub_choice = input("Enter your choice: ")
+                    if sub_choice == '1':
+                        register_user()
+                    elif sub_choice == '2':
+                        register_patient()
+                    elif sub_choice == '3':
+                        display_patient_records()
+                    elif sub_choice == '4':
+                        read_file()
+                    elif sub_choice == '5':
+                        write_file()
+                    elif sub_choice == '6':
+                        print("Logged out.")
+                        break
+                    else:
+                        print("Invalid choice. Please try again.")
+            elif role == "user":
+                print("User login successful.")
+                while True:
+                    print("\n1. Register Patient\n2. View Patient Records\n3. Logout")
+                    sub_choice = input("Enter your choice: ")
+                    if sub_choice == '1':
+                        register_patient()
+                    elif sub_choice == '2':
+                        display_patient_records()
+                    elif sub_choice == '3':
+                        print("Logged out.")
+                        break
+                    else:
+                        print("Invalid choice. Please try again.")
+        elif choice == '2':
+            print("Exiting the system. Goodbye!")
+            break
+        else:
+            print("Invalid choice. Please try again.")
+
+if __name__ == "__main__":
+    main()
